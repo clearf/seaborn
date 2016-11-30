@@ -1,8 +1,19 @@
 """Functions that alter the matplotlib rc dictionary on the fly."""
+from distutils.version import LooseVersion
+import functools
+
 import numpy as np
 import matplotlib as mpl
 
-from . import palettes
+from . import palettes, _orig_rc_params
+
+
+mpl_ge_150 = LooseVersion(mpl.__version__) >= '1.5.0'
+
+
+__all__ = ["set", "reset_defaults", "reset_orig",
+           "axes_style", "set_style", "plotting_context", "set_context",
+           "set_palette"]
 
 
 _style_keys = (
@@ -108,35 +119,7 @@ def reset_defaults():
 
 def reset_orig():
     """Restore all RC params to original settings (respects custom rc)."""
-    mpl.rcParams.update(mpl.rcParamsOrig)
-
-
-class _AxesStyle(dict):
-    """Light wrapper on a dict to set style temporarily."""
-    def __enter__(self):
-        """Open the context."""
-        rc = mpl.rcParams
-        self._orig_style = {k: rc[k] for k in _style_keys}
-        set_style(self)
-        return self
-
-    def __exit__(self, *args):
-        """Close the context."""
-        set_style(self._orig_style)
-
-
-class _PlottingContext(dict):
-    """Light wrapper on a dict to set context temporarily."""
-    def __enter__(self):
-        """Open the context."""
-        rc = mpl.rcParams
-        self._orig_context = {k: rc[k] for k in _context_keys}
-        set_context(self)
-        return self
-
-    def __exit__(self, *args):
-        """Close the context."""
-        set_context(self._orig_context)
+    mpl.rcParams.update(_orig_rc_params)
 
 
 def axes_style(style=None, rc=None):
@@ -457,6 +440,35 @@ def set_context(context=None, font_scale=1, rc=None):
     mpl.rcParams.update(context_object)
 
 
+class _RCAesthetics(dict):
+    def __enter__(self):
+        rc = mpl.rcParams
+        self._orig = {k: rc[k] for k in self._keys}
+        self._set(self)
+
+    def __exit__(self, exc_type, exc_value, exc_tb):
+        self._set(self._orig)
+
+    def __call__(self, func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            with self:
+                return func(*args, **kwargs)
+        return wrapper
+
+
+class _AxesStyle(_RCAesthetics):
+    """Light wrapper on a dict to set style temporarily."""
+    _keys = _style_keys
+    _set = staticmethod(set_style)
+
+
+class _PlottingContext(_RCAesthetics):
+    """Light wrapper on a dict to set context temporarily."""
+    _keys = _context_keys
+    _set = staticmethod(set_context)
+
+
 def set_palette(palette, n_colors=None, desat=None, color_codes=False):
     """Set the matplotlib color cycle using a seaborn palette.
 
@@ -490,7 +502,12 @@ def set_palette(palette, n_colors=None, desat=None, color_codes=False):
 
     """
     colors = palettes.color_palette(palette, n_colors, desat)
-    mpl.rcParams["axes.color_cycle"] = list(colors)
+    if mpl_ge_150:
+        from cycler import cycler
+        cyl = cycler('color', colors)
+        mpl.rcParams['axes.prop_cycle'] = cyl
+    else:
+        mpl.rcParams["axes.color_cycle"] = list(colors)
     mpl.rcParams["patch.facecolor"] = colors[0]
     if color_codes:
         palettes.set_color_codes(palette)
